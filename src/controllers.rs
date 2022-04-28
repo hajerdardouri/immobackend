@@ -49,6 +49,6 @@ pub async fn listing(data: web::Data<Client>, qs: web::Query<SearchParams>) -> i
 }
 
 #[derive(Deserialize)]
-struct SearchParams {
+pub struct SearchParams {
     q: Option<String>,
 }

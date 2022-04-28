@@ -1,0 +1,22 @@
+[package]
+name = "immorust"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+mongodb = { version = "2.1.0", default-features = false ,features = ["async-std-runtime"]}
+tokio = { version = "0.3.3", features = ["full"] }
+warp = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+futures = { version = "0.3", default-features = false, features = ["async-await"]}
+async-std = { version = "1", features = ["attributes", "tokio1"] }
+actix-web = "3.0"
+actix-rt = "1.1.1"
+bson = "1.0.0"
+rustc-serialize = "0.3.24"
+actix-cors = "0.5.4"
+regex = "0.1"

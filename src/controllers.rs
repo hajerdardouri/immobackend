@@ -11,6 +11,7 @@ use mongodb::bson::oid::ObjectId;
 use mongodb::bson::Document;
 use mongodb::error::ErrorKind::Write;
 use mongodb::error::WriteFailure;
+use mongodb::options::FindOneOptions;
 use mongodb::Client;
 use serde::{Deserialize, Serialize};
 
@@ -148,20 +149,6 @@ pub async fn create_user(
     let user_collection = db
         .database(MONGO_DB)
         .collection::<User>(MONGOCOLLECTIONUSERS);
-    let jwt_claim = JWTClaim {
-        aud: "public".to_string(),
-        exp: (chrono::Utc::now() + Duration::seconds(10)).timestamp() as usize,
-        iat: chrono::Utc::now().timestamp() as usize,
-        iss: "Tayara".to_string(),
-        nbf: chrono::Utc::now().timestamp() as usize,
-        sub: user.username.to_string(),
-    };
-    let token = encode(
-        &Header::default(),
-        &jwt_claim,
-        &EncodingKey::from_secret(JWT_SECRET.as_ref()),
-    )
-    .map_err(|_| HttpResponse::InternalServerError().body("could_not_encode_jwt_token"))?;
 
     Ok(
         match user_collection
@@ -181,7 +168,24 @@ pub async fn create_user(
         {
             Ok(db_result) => {
                 println!("New user created with id {}", db_result.inserted_id);
-                HttpResponse::Created().body("insert_successful")
+
+                let jwt_claim = JWTClaim {
+                    aud: "public".to_string(),
+                    exp: (chrono::Utc::now() + Duration::seconds(2000)).timestamp() as usize,
+                    iat: chrono::Utc::now().timestamp() as usize,
+                    iss: "Tayara".to_string(),
+                    nbf: chrono::Utc::now().timestamp() as usize,
+                    sub: db_result.inserted_id.to_string(),
+                };
+                let token = encode(
+                    &Header::default(),
+                    &jwt_claim,
+                    &EncodingKey::from_secret(JWT_SECRET.as_ref()),
+                )
+                .map_err(|_| {
+                    HttpResponse::InternalServerError().body("could_not_encode_jwt_token")
+                })?;
+                HttpResponse::Created().json(SigninPayload { token })
             }
             Err(err) => match err.kind.as_ref() {
                 Write(WriteFailure::WriteError(e)) if e.code == 11000 => {
@@ -223,7 +227,7 @@ pub async fn signin(
             // success
             let jwt_claim = JWTClaim {
                 aud: "public".to_string(),
-                exp: (chrono::Utc::now() + Duration::seconds(10)).timestamp() as usize,
+                exp: (chrono::Utc::now() + Duration::seconds(2000)).timestamp() as usize,
                 iat: chrono::Utc::now().timestamp() as usize,
                 iss: "Tayara".to_string(),
                 nbf: chrono::Utc::now().timestamp() as usize,
@@ -245,4 +249,44 @@ pub async fn signin(
         // username error
         Ok(HttpResponse::Unauthorized().body("invalid_username"))
     }
+}
+
+#[post("api/user_profile")]
+pub async fn user_profile(
+    db: web::Data<Client>,
+    request: HttpRequest,
+) -> actix_web::Result<HttpResponse> {
+    let users_collection = db
+        .database(MONGO_DB)
+        .collection::<User>(MONGOCOLLECTIONUSERS);
+    let req_headers = request.headers();
+    let basic_auth_header = req_headers.get("Authorization");
+    let basic_auth = basic_auth_header
+        .ok_or(HttpResponse::Unauthorized().body("missing_authorization_header"))?
+        .to_str()
+        .map_err(|_| HttpResponse::Unauthorized().body("invalid_authorization_header"))?
+        .replace("Bearer ", "");
+
+    let claim = decode::<JWTClaim>(
+        &basic_auth,
+        &DecodingKey::from_secret(JWT_SECRET.as_ref()),
+        &{
+            let mut validation = Validation::default();
+            validation.validate_exp = true;
+            validation
+        },
+    )
+    .map_err(|e| HttpResponse::Unauthorized().body(e.to_string()))?;
+
+    let mut filter = Document::new();
+    filter.insert("_id", ObjectId::parse_str(claim.claims.sub).unwrap());
+    let mut find_one_options = FindOneOptions::default();
+    find_one_options.projection = doc! {"password":0};
+    let user = users_collection
+        .find_one(Some(filter), Some(find_one_options))
+        .await
+        .unwrap();
+    Ok(match user(HttpResponse::Ok().json(user)).await {
+        Err(_) => HttpResponse::NotFound().finish(),
+    })
 }

@@ -10,6 +10,7 @@ use actix_web::{web, App, HttpServer};
 use mongodb::options::IndexOptions;
 use mongodb::{bson::doc, options::ClientOptions, Client, IndexModel};
 
+pub const JWT_SECRET: &'static str = "mytopsecretforjwt";
 pub const MONGO_DB: &'static str = "immoexpert";
 pub const MONGOCOLLECTIONLISTING: &'static str = "listings";
 pub const MONGOCOLLECTIONUSERS: &'static str = "users";
@@ -38,6 +39,7 @@ async fn main() -> std::io::Result<()> {
         let cors = Cors::allow_any_origin(Default::default())
             .allow_any_header()
             .allow_any_method();
+
         App::new()
             .wrap(cors)
             .app_data(web::Data::new(client.clone()))

@@ -4,13 +4,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Listing {
     pub _id: ObjectId,
+    pub user_id: ObjectId,
     pub photo: Option<String>,
     pub title: String,
     pub location: Option<String>,
-    pub bednum: Option<String>,
-    pub bathnum: Option<String>,
-    pub surfacesize: Option<String>,
-    pub price: Option<String>,
+    pub bednum: Option<i32>,
+    pub bathnum: Option<i32>,
+    pub surfacesize: Option<i32>,
+    pub price: Option<i32>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct User {
@@ -19,4 +20,14 @@ pub struct User {
     pub email: String,
     pub password: String,
     pub account_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JWTClaim {
+    pub aud: String,
+    pub exp: usize,
+    pub iat: usize,
+    pub iss: String,
+    pub nbf: usize,
+    pub sub: String,
 }

@@ -157,7 +157,7 @@ pub async fn create_user(
                     _id: ObjectId::new(),
                     username: user.username.clone(),
                     email: user.email.clone(),
-                    password: format!("{:x}", md5::compute(user.password.clone())),
+                    password: Some(format!("{:x}", md5::compute(user.password.clone()))),
                     account_type: user.account_type.clone(),
                 },
                 // doc! {"username": &users.username, "email": &users.email, "password": &users.password,
@@ -223,7 +223,7 @@ pub async fn signin(
     let md5password = format!("{:x}", md5::compute(user.password.clone()));
 
     if let Some(u) = db_user {
-        if u.password == md5password {
+        if u.password == Some(md5password) {
             // success
             let jwt_claim = JWTClaim {
                 aud: "public".to_string(),
@@ -279,14 +279,16 @@ pub async fn user_profile(
     .map_err(|e| HttpResponse::Unauthorized().body(e.to_string()))?;
 
     let mut filter = Document::new();
-    filter.insert("_id", ObjectId::parse_str(claim.claims.sub).unwrap());
+    filter.insert("_id", ObjectId::parse_str(dbg!(claim.claims.sub)).unwrap());
     let mut find_one_options = FindOneOptions::default();
-    find_one_options.projection = doc! {"password":0};
+    find_one_options.projection = Some(doc! { "password": 0 });
     let user = users_collection
         .find_one(Some(filter), Some(find_one_options))
         .await
         .unwrap();
-    Ok(match user(HttpResponse::Ok().json(user)).await {
-        Err(_) => HttpResponse::NotFound().finish(),
+
+    Ok(match user {
+        Some(u) => HttpResponse::Ok().json(u),
+        None => HttpResponse::NotFound().finish(),
     })
 }

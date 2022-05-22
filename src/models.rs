@@ -13,12 +13,13 @@ pub struct Listing {
     pub surfacesize: Option<i32>,
     pub price: Option<i32>,
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct User {
     pub _id: ObjectId,
     pub username: String,
     pub email: String,
-    pub password: String,
+    pub password: Option<String>,
     pub account_type: String,
 }
 

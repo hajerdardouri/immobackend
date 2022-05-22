@@ -3,7 +3,7 @@ mod models;
 
 extern crate actix_web;
 
-use crate::controllers::{create_listing, create_user, listing, signin};
+use crate::controllers::{create_listing, create_user, listing, signin, user_profile};
 use crate::models::User;
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
@@ -48,6 +48,7 @@ async fn main() -> std::io::Result<()> {
             .service(create_listing)
             .service(create_user)
             .service(signin)
+            .service(user_profile)
     })
     .bind(("0.0.0.0", 8082))?
     .run()

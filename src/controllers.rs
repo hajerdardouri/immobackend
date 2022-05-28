@@ -1,19 +1,24 @@
+use std::ffi::OsStr;
 use crate::models::{JWTClaim, Listing, User};
-use crate::{JWT_SECRET, MONGOCOLLECTIONLISTING, MONGOCOLLECTIONUSERS, MONGO_DB};
-use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder};
+use crate::{JWT_SECRET, MONGOCOLLECTIONLISTING, MONGOCOLLECTIONUSERS, MONGO_DB, UPLOADS_DIR};
+use actix_multipart::Multipart;
+use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder, ResponseError};
 use chrono;
 use chrono::Duration;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use md5;
 use mongodb::bson::doc;
 use mongodb::bson::oid::ObjectId;
 use mongodb::bson::Document;
-use mongodb::error::ErrorKind::Write;
 use mongodb::error::WriteFailure;
 use mongodb::options::FindOneOptions;
 use mongodb::Client;
+use nanoid::nanoid;
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io::Write;
+use std::path::Path;
 
 //fetch_listing
 #[derive(Debug, Serialize, Deserialize)]
@@ -188,7 +193,9 @@ pub async fn create_user(
                 HttpResponse::Created().json(SigninPayload { token })
             }
             Err(err) => match err.kind.as_ref() {
-                Write(WriteFailure::WriteError(e)) if e.code == 11000 => {
+                mongodb::error::ErrorKind::Write(WriteFailure::WriteError(e))
+                    if e.code == 11000 =>
+                {
                     HttpResponse::Unauthorized().body("username_unavailable")
                 }
                 _ => HttpResponse::InternalServerError().finish(),
@@ -319,4 +326,61 @@ pub async fn product_details(
         Some(l) => HttpResponse::Ok().json(l),
         None => HttpResponse::NotFound().body("listing_not_found"),
     })
+}
+
+#[derive(Deserialize, Serialize)]
+struct UploadResponseFile {
+    name: String,
+    link: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct UploadResponse {
+    files: Vec<UploadResponseFile>,
+}
+
+#[post("api/upload")]
+pub async fn upload(mut payload: Multipart) -> actix_web::Result<HttpResponse> {
+    // iterate over multipart stream
+
+    let mut upload_res = UploadResponse { files: vec![] };
+
+    while let Some(mut field) = payload.try_next().await.map_err(|e| e.error_response())? {
+        // A multipart/form-data stream has to contain `content_disposition`
+        let content_disposition = field
+            .content_disposition()
+            .ok_or(HttpResponse::BadRequest().body("invalid_file"))?;
+
+        let ext = Path::new(content_disposition.get_filename().ok_or(HttpResponse::BadRequest().body("invalid_file"))?)
+            .extension()
+            .and_then(OsStr::to_str).map(|e| format!(".{}", e) );
+        let filename = format!(
+            "{}{}",
+            nanoid!(),
+            ext.unwrap_or("".to_string())
+        );
+
+        let filepath = format!("{}{}", UPLOADS_DIR, filename.clone());
+
+        // File::create is blocking operation, use threadpool
+        fs::create_dir_all(UPLOADS_DIR).map_err(|e| e.error_response())?;
+        let mut f = web::block(move || std::fs::File::create(filepath))
+            .await
+            .map_err(|e| e.error_response())?;
+
+        // Field in turn is stream of *Bytes* object
+        while let Some(chunk) = field.try_next().await.map_err(|e| e.error_response())? {
+            // filesystem operations are blocking, we have to use threadpool
+            f = web::block(move || f.write_all(&chunk).map(|_| f))
+                .await
+                .map_err(|e| e.error_response())?;
+        }
+
+        upload_res.files.push(UploadResponseFile {
+            name: content_disposition.get_name().unwrap_or("").to_string(),
+            link: filename.clone(),
+        });
+    }
+
+    Ok(HttpResponse::Ok().json(upload_res).into())
 }

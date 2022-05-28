@@ -4,11 +4,12 @@ mod models;
 extern crate actix_web;
 
 use crate::controllers::{
-    create_listing, create_user, listing, product_details, signin, user_profile,
+    create_listing, create_user, listing, product_details, signin, upload, user_profile,
 };
 use crate::models::User;
 use actix_cors::Cors;
-use actix_web::{web, App, HttpServer};
+use actix_files::Files;
+use actix_web::{middleware, web, App, HttpServer};
 use mongodb::options::IndexOptions;
 use mongodb::{bson::doc, options::ClientOptions, Client, IndexModel};
 
@@ -16,10 +17,15 @@ pub const JWT_SECRET: &'static str = "mytopsecretforjwt";
 pub const MONGO_DB: &'static str = "immoexpert";
 pub const MONGOCOLLECTIONLISTING: &'static str = "listings";
 pub const MONGOCOLLECTIONUSERS: &'static str = "users";
+pub const UPLOADS_DIR: &'static str = "./uploads/";
 
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
-    std::env::set_var("RUST_LOG", "actix_web=debug");
+
+    env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
+    std::env::set_var("RUST_LOG", "actix_web=info");
+
+    println!("Connecting to MongoDB..");
     let mut client_options = ClientOptions::parse("mongodb://127.0.0.1:27017/listings")
         .await
         .unwrap();
@@ -43,6 +49,7 @@ async fn main() -> std::io::Result<()> {
             .allow_any_method();
 
         App::new()
+            .wrap(middleware::Logger::default())
             .wrap(cors)
             .app_data(web::Data::new(client.clone()))
             .service(listing)
@@ -52,6 +59,8 @@ async fn main() -> std::io::Result<()> {
             .service(signin)
             .service(user_profile)
             .service(product_details)
+            .service(upload)
+            .service(Files::new("/api/uploads/", UPLOADS_DIR).index_file("index.html"))
     })
     .bind(("0.0.0.0", 8082))?
     .run()

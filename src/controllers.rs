@@ -292,3 +292,31 @@ pub async fn user_profile(
         None => HttpResponse::NotFound().finish(),
     })
 }
+
+//product details
+
+#[derive(Deserialize, Serialize)]
+pub struct Product {
+    _id: String,
+}
+
+#[post("api/product_details")]
+pub async fn product_details(
+    db: web::Data<Client>,
+    p: web::Json<Product>,
+) -> actix_web::Result<HttpResponse> {
+    let listing_collection = db
+        .database(MONGO_DB)
+        .collection::<Listing>(MONGOCOLLECTIONLISTING);
+    let mut filter = Document::new();
+    filter.insert("_id", ObjectId::parse_str(p._id.clone()).unwrap());
+    let item = listing_collection
+        .find_one(Some(filter), None)
+        .await
+        .unwrap();
+
+    Ok(match item {
+        Some(l) => HttpResponse::Ok().json(l),
+        None => HttpResponse::NotFound().body("listing_not_found"),
+    })
+}

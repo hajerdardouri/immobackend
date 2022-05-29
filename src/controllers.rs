@@ -180,7 +180,7 @@ pub async fn create_user(
                     iat: chrono::Utc::now().timestamp() as usize,
                     iss: "Tayara".to_string(),
                     nbf: chrono::Utc::now().timestamp() as usize,
-                    sub: db_result.inserted_id.to_string(),
+                    sub: db_result.inserted_id.as_object_id().map(|id| id.to_string()).unwrap(),
                 };
                 let token = encode(
                     &Header::default(),

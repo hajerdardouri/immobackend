@@ -22,7 +22,17 @@ pub struct User {
     pub password: Option<String>,
     pub account_type: String,
 }
-
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Wishlist {
+    pub listing_id: ObjectId,
+    pub user_id: ObjectId,
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Callback {
+    pub _id: ObjectId,
+    pub user_id: ObjectId,
+    pub number: i32,
+}
 #[derive(Debug, Serialize, Deserialize)]
 pub struct JWTClaim {
     pub aud: String,

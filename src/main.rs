@@ -3,9 +3,7 @@ mod models;
 
 extern crate actix_web;
 
-use crate::controllers::{
-    create_listing, create_user, listing, product_details, signin, upload, user_profile,
-};
+use crate::controllers::{create_listing, create_user, delete_wishlist, listing, product_details, show_wishlist, signin, upload, user_profile, wishlist, callback};
 use crate::models::User;
 use actix_cors::Cors;
 use actix_files::Files;
@@ -17,11 +15,13 @@ pub const JWT_SECRET: &'static str = "mytopsecretforjwt";
 pub const MONGO_DB: &'static str = "immoexpert";
 pub const MONGOCOLLECTIONLISTING: &'static str = "listings";
 pub const MONGOCOLLECTIONUSERS: &'static str = "users";
+pub const MONGOCOLLECTIONWISHLIST: &'static str = "wishlist";
+pub const MONGOCOLLECTIONCALLBACK: &'static str = "callback";
+
 pub const UPLOADS_DIR: &'static str = "./uploads/";
 
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
-
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
     std::env::set_var("RUST_LOG", "actix_web=info");
 
@@ -61,6 +61,10 @@ async fn main() -> std::io::Result<()> {
             .service(product_details)
             .service(upload)
             .service(Files::new("/api/uploads/", UPLOADS_DIR).index_file("index.html"))
+            .service(wishlist)
+            .service(show_wishlist)
+            .service(delete_wishlist)
+            .service(callback)
     })
     .bind(("0.0.0.0", 8082))?
     .run()

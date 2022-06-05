@@ -1,8 +1,7 @@
-use std::ffi::OsStr;
-use crate::models::{JWTClaim, Listing, User};
-use crate::{JWT_SECRET, MONGOCOLLECTIONLISTING, MONGOCOLLECTIONUSERS, MONGO_DB, UPLOADS_DIR};
+use crate::models::{JWTClaim, Listing, User, Wishlist, Callback};
+use crate::{JWT_SECRET, MONGOCOLLECTIONLISTING, MONGOCOLLECTIONUSERS, MONGOCOLLECTIONWISHLIST, MONGO_DB, UPLOADS_DIR, MONGOCOLLECTIONCALLBACK};
 use actix_multipart::Multipart;
-use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder, ResponseError};
+use actix_web::{post, web, HttpRequest, HttpResponse, Responder, ResponseError};
 use chrono;
 use chrono::Duration;
 use futures::{StreamExt, TryStreamExt};
@@ -16,6 +15,7 @@ use mongodb::options::FindOneOptions;
 use mongodb::Client;
 use nanoid::nanoid;
 use serde::{Deserialize, Serialize};
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -31,21 +31,33 @@ struct Claims {
 #[derive(Deserialize)]
 pub struct SearchParams {
     q: Option<String>,
+    location: Option<String>,
+    bednum: Option<i32>,
+    bathnum: Option<i32>,
+    surfacesize: Option<i32>,
 }
 
-#[get("api/listing")]
-pub async fn listing(db: web::Data<Client>, qs: web::Query<SearchParams>) -> impl Responder {
+#[post("api/listing")]
+pub async fn listing(db: web::Data<Client>, qs: web::Json<SearchParams>) -> impl Responder {
     let listing_collection = db
         .database(MONGO_DB)
         .collection::<Listing>(MONGOCOLLECTIONLISTING);
     let mut filter = Document::new();
+
     qs.q.as_ref().map(|q| {
-        filter.insert(
-            "title",
-            doc! { "$regex": format!("{}", q), "$options": "i" },
-        );
-        filter.insert("location", q);
-        filter.insert("bednum", q);
+        filter.insert("title", doc! { "$regex": q, "$options": "i" });
+    });
+    qs.location.as_ref().map(|location| {
+        filter.insert("location", location);
+    });
+    qs.bednum.as_ref().map(|bednum| {
+        filter.insert("bednum", bednum);
+    });
+    qs.surfacesize.as_ref().map(|surfacesize| {
+        filter.insert("surfacesize", surfacesize);
+    });
+    qs.bathnum.as_ref().map(|bathnum| {
+        filter.insert("bathnum", bathnum);
     });
 
     let mut cursor = listing_collection.find(Some(filter), None).await.unwrap();
@@ -180,7 +192,11 @@ pub async fn create_user(
                     iat: chrono::Utc::now().timestamp() as usize,
                     iss: "Tayara".to_string(),
                     nbf: chrono::Utc::now().timestamp() as usize,
-                    sub: db_result.inserted_id.as_object_id().map(|id| id.to_string()).unwrap(),
+                    sub: db_result
+                        .inserted_id
+                        .as_object_id()
+                        .map(|id| id.to_string())
+                        .unwrap(),
                 };
                 let token = encode(
                     &Header::default(),
@@ -351,14 +367,15 @@ pub async fn upload(mut payload: Multipart) -> actix_web::Result<HttpResponse> {
             .content_disposition()
             .ok_or(HttpResponse::BadRequest().body("invalid_file"))?;
 
-        let ext = Path::new(content_disposition.get_filename().ok_or(HttpResponse::BadRequest().body("invalid_file"))?)
-            .extension()
-            .and_then(OsStr::to_str).map(|e| format!(".{}", e) );
-        let filename = format!(
-            "{}{}",
-            nanoid!(),
-            ext.unwrap_or("".to_string())
-        );
+        let ext = Path::new(
+            content_disposition
+                .get_filename()
+                .ok_or(HttpResponse::BadRequest().body("invalid_file"))?,
+        )
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(|e| format!(".{}", e));
+        let filename = format!("{}{}", nanoid!(), ext.unwrap_or("".to_string()));
 
         let filepath = format!("{}{}", UPLOADS_DIR, filename.clone());
 
@@ -383,4 +400,230 @@ pub async fn upload(mut payload: Multipart) -> actix_web::Result<HttpResponse> {
     }
 
     Ok(HttpResponse::Ok().json(upload_res).into())
+}
+//wishlist
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WishlistData {
+    pub listing_id: String,
+}
+#[post("api/wishlist")]
+pub async fn wishlist(
+    db: web::Data<Client>,
+    data: web::Json<WishlistData>,
+    request: HttpRequest,
+) -> actix_web::Result<HttpResponse> {
+    let wishlist_collection = db
+        .database(MONGO_DB)
+        .collection::<Wishlist>(MONGOCOLLECTIONWISHLIST);
+
+    let req_headers = request.headers();
+    let basic_auth_header = req_headers.get("Authorization");
+    let basic_auth = basic_auth_header
+        .ok_or(HttpResponse::Unauthorized().body("missing_authorization_header"))?
+        .to_str()
+        .map_err(|_| HttpResponse::Unauthorized().body("invalid_authorization_header"))?
+        .replace("Bearer ", "");
+
+    let claim = decode::<JWTClaim>(
+        &basic_auth,
+        &DecodingKey::from_secret(JWT_SECRET.as_ref()),
+        &{
+            let mut validation = Validation::default();
+            validation.validate_exp = true;
+            validation
+        },
+    )
+    .map_err(|e| HttpResponse::Unauthorized().body(e.to_string()))?;
+
+    return Ok(
+        match wishlist_collection
+            .insert_one(
+                Wishlist {
+                    listing_id: ObjectId::parse_str(data.listing_id.clone()).unwrap(),
+                    user_id: ObjectId::parse_str(claim.claims.sub.as_str()).map_err(|_| {
+                        HttpResponse::InternalServerError().body("could_not_parse_userId")
+                    })?,
+                },
+                None,
+            )
+            .await
+        {
+            Ok(db_result) => {
+                println!("New document inserted with id {}", db_result.inserted_id);
+                HttpResponse::Created().body("insert_successful")
+            }
+            Err(_) => HttpResponse::InternalServerError().finish(),
+        },
+    );
+}
+#[post("api/show_wishlist")]
+pub async fn show_wishlist(
+    db: web::Data<Client>,
+    request: HttpRequest,
+) -> actix_web::Result<HttpResponse> {
+    let wishlist_collection = db
+        .database(MONGO_DB)
+        .collection::<Wishlist>(MONGOCOLLECTIONWISHLIST);
+
+    let req_headers = request.headers();
+    let basic_auth_header = req_headers.get("Authorization");
+    let basic_auth = basic_auth_header
+        .ok_or(HttpResponse::Unauthorized().body("missing_authorization_header"))?
+        .to_str()
+        .map_err(|_| HttpResponse::Unauthorized().body("invalid_authorization_header"))?
+        .replace("Bearer ", "");
+    let claim = decode::<JWTClaim>(
+        &basic_auth,
+        &DecodingKey::from_secret(JWT_SECRET.as_ref()),
+        &{
+            let mut validation = Validation::default();
+            validation.validate_exp = true;
+            validation
+        },
+    )
+    .map_err(|e| HttpResponse::Unauthorized().body(e.to_string()))?;
+
+    let mut filter = Document::new();
+    filter.insert(
+        "user_id",
+        ObjectId::parse_str(claim.claims.sub.as_str())
+            .map_err(|_| HttpResponse::InternalServerError().body("could_not_parse_userId"))?,
+    );
+    let mut cursor = wishlist_collection.find(Some(filter), None).await.unwrap();
+    let mut wishlist_ids = Vec::new();
+
+    while let Some(wishlist_doc) = cursor.next().await {
+        match wishlist_doc {
+            Ok(document) => {
+                wishlist_ids.push(document.listing_id);
+            }
+            _ => return Ok(HttpResponse::InternalServerError().finish()),
+        }
+    }
+
+    let mut filter = Document::new();
+    filter.insert(
+        "_id",
+        doc! {
+            "$in": wishlist_ids
+        },
+    );
+    let listing_collection = db
+        .database(MONGO_DB)
+        .collection::<Listing>(MONGOCOLLECTIONLISTING);
+
+    let mut cursor = listing_collection.find(Some(filter), None).await.unwrap();
+    let mut listings = Vec::new();
+
+    while let Some(listing_res) = cursor.next().await {
+        match listing_res {
+            Ok(listing_doc) => {
+                listings.push(listing_doc);
+            }
+            _ => return Ok(HttpResponse::InternalServerError().finish()),
+        }
+    }
+
+    Ok(HttpResponse::Ok().json(listings))
+}
+
+#[post("api/delete_wishlist")]
+pub async fn delete_wishlist(
+    db: web::Data<Client>,
+    data: web::Json<WishlistData>,
+    request: HttpRequest,
+) -> actix_web::Result<HttpResponse> {
+    let wishlist_collection = db
+        .database(MONGO_DB)
+        .collection::<Wishlist>(MONGOCOLLECTIONWISHLIST);
+
+    let req_headers = request.headers();
+    let basic_auth_header = req_headers.get("Authorization");
+    let basic_auth = basic_auth_header
+        .ok_or(HttpResponse::Unauthorized().body("missing_authorization_header"))?
+        .to_str()
+        .map_err(|_| HttpResponse::Unauthorized().body("invalid_authorization_header"))?
+        .replace("Bearer ", "");
+    let claim = decode::<JWTClaim>(
+        &basic_auth,
+        &DecodingKey::from_secret(JWT_SECRET.as_ref()),
+        &{
+            let mut validation = Validation::default();
+            validation.validate_exp = true;
+            validation
+        },
+    )
+    .map_err(|e| HttpResponse::Unauthorized().body(e.to_string()))?;
+
+    let listing_id = ObjectId::parse_str(data.listing_id.clone()).unwrap();
+    let user_id = ObjectId::parse_str(claim.claims.sub.as_str())
+        .map_err(|_| HttpResponse::InternalServerError().body("could_not_parse_userId"))?;
+    let filter = doc! {
+        "listing_id": listing_id,
+        "user_id": user_id
+    };
+    wishlist_collection
+        .delete_many(filter, None)
+        .await
+        .map_err(|_| HttpResponse::InternalServerError().body("cound_not_delete_wishlist"))?;
+
+    Ok(HttpResponse::Gone().finish())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CallbackData {
+    pub _id: String,
+    pub number: i32,
+}
+#[post("api/callback")]
+pub async fn callback(
+    db: web::Data<Client>,
+    data: web::Json<CallbackData>,
+    request: HttpRequest,
+) -> actix_web::Result<HttpResponse> {
+    let callback_collection = db
+        .database(MONGO_DB)
+        .collection::<Callback>(MONGOCOLLECTIONCALLBACK);
+
+    let req_headers = request.headers();
+    let basic_auth_header = req_headers.get("Authorization");
+    let basic_auth = basic_auth_header
+        .ok_or(HttpResponse::Unauthorized().body("missing_authorization_header"))?
+        .to_str()
+        .map_err(|_| HttpResponse::Unauthorized().body("invalid_authorization_header"))?
+        .replace("Bearer ", "");
+
+    let claim = decode::<JWTClaim>(
+        &basic_auth,
+        &DecodingKey::from_secret(JWT_SECRET.as_ref()),
+        &{
+            let mut validation = Validation::default();
+            validation.validate_exp = true;
+            validation
+        },
+    )
+        .map_err(|e| HttpResponse::Unauthorized().body(e.to_string()))?;
+
+    return Ok(
+        match callback_collection
+            .insert_one(
+                Callback {
+                    _id: ObjectId::parse_str(data._id.clone()).unwrap(),
+                    user_id: ObjectId::parse_str(claim.claims.sub.as_str()).map_err(|_| {
+                        HttpResponse::InternalServerError().body("could_not_parse_userId")
+                    })?,
+                    number: data.number.clone(),
+                },
+                None,
+            )
+            .await
+        {
+            Ok(db_result) => {
+                println!("New document inserted with id {}", db_result.inserted_id);
+                HttpResponse::Created().body("insert_successful")
+            }
+            Err(_) => HttpResponse::InternalServerError().finish(),
+        },
+    );
 }
